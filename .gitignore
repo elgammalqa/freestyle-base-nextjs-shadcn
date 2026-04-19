@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Orval-generated code — run `npm run codegen` to regenerate
+lib/api-client/generated/
+lib/api-zod/generated/
+
+# Drizzle migrations folder (generated on db:push)
+/drizzle
