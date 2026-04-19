@@ -10,6 +10,9 @@ export default defineConfig({
       baseUrl: "/api",
       clean: true,
       override: {
+        fetch: {
+          includeHttpResponseReturnType: false,
+        },
         mutator: {
           path: "./lib/api-client/custom-fetch.ts",
           name: "customFetch",
