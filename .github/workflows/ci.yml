@@ -1,0 +1,154 @@
+name: CI
+
+# Fast build gate that blocks the "broken template merges to main" failure
+# mode. Every PR + every push to main runs the same checks the live sandbox
+# runs during scaffold preflight, so a regression is caught before the
+# snapshot rotation workflow ever bakes it.
+#
+# Checks:
+#   1. `npm ci` — exercises the postinstall codegen hook; generated dirs
+#      must materialize or we fail here.
+#   2. `npm run typecheck` — catches missing re-exports, wrong types, etc.
+#   3. `npm run build` — compiles with `next.config.ts`'s ignoreBuildErrors
+#      and ignoreDuringBuilds removed, so TS + lint errors now fail the
+#      build instead of silently shipping.
+#   4. `npm run dev` boot + `/api/healthz` smoke — catches runtime
+#      regressions the build doesn't (e.g. a module that compiles fine but
+#      crashes at import).
+#   5. `/api/buildra/selftest` structural checks — ensures the generated
+#      code is loadable and `db/schema/tables` exports are intact. DB
+#      checks are expected to fail here (no real Neon in CI) and we
+#      ignore them; the point is the structural gates.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build + typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Dummy URL so `lib/db.ts`'s top-level neon(DATABASE_URL!) doesn't
+      # throw at module load. CI does not touch the real DB — only code
+      # resolution and compilation matter here.
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: npm ci (runs postinstall codegen)
+        run: npm ci
+
+      - name: Verify codegen output materialized
+        run: |
+          set -e
+          test -f lib/api-client/generated/api.ts || { echo "::error::lib/api-client/generated/api.ts missing after npm ci — postinstall codegen did not run"; exit 1; }
+          test -f lib/api-zod/generated/zod.ts || { echo "::error::lib/api-zod/generated/zod.ts missing after npm ci — postinstall codegen did not run"; exit 1; }
+          echo "::notice::codegen output materialized via postinstall"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build (TS + lint gated)
+        run: npm run build
+
+  smoke:
+    name: Dev-server smoke + selftest
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Start dev server in background
+        run: |
+          nohup npm run dev > dev-server.log 2>&1 &
+          echo $! > dev-server.pid
+          echo "Dev server PID: $(cat dev-server.pid)"
+
+      - name: Wait for /api/healthz
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/api/healthz > /dev/null 2>&1; then
+              echo "::notice::dev server healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::dev server never responded to /api/healthz within 60s"
+          tail -n 100 dev-server.log
+          exit 1
+
+      - name: healthz smoke
+        run: |
+          RESPONSE=$(curl -sS http://localhost:3000/api/healthz)
+          echo "healthz response: $RESPONSE"
+          echo "$RESPONSE" | grep -q '"status":"ok"' || {
+            echo "::error::healthz body did not include status:ok";
+            exit 1;
+          }
+
+      - name: selftest structural checks
+        run: |
+          curl -sS http://localhost:3000/api/buildra/selftest -o selftest.json || true
+          echo "selftest response:"
+          cat selftest.json
+          echo
+          node -e '
+            const raw = require("fs").readFileSync("selftest.json", "utf8");
+            let payload;
+            try { payload = JSON.parse(raw); } catch (err) {
+              console.error("::error::selftest did not return JSON:", err.message);
+              console.error("raw body:", raw.slice(0, 500));
+              process.exit(1);
+            }
+            const required = new Set([
+              "lib/api-client/generated loadable",
+              "lib/api-zod/generated loadable",
+              "db/schema/tables exports intact",
+            ]);
+            const failed = (payload.checks ?? []).filter(
+              (c) => required.has(c.name) && !c.ok,
+            );
+            if (failed.length > 0) {
+              console.error("::error::structural selftest checks failed:");
+              for (const c of failed) {
+                console.error("  - " + c.name + ": " + (c.detail ?? "(no detail)"));
+              }
+              process.exit(1);
+            }
+            console.log("all structural selftest checks passed");
+          '
+
+      - name: Dump dev-server log on failure
+        if: failure()
+        run: |
+          echo "--- dev-server.log ---"
+          tail -n 200 dev-server.log || true
+
+      - name: Stop dev server
+        if: always()
+        run: |
+          if [ -f dev-server.pid ]; then
+            kill "$(cat dev-server.pid)" 2>/dev/null || true
+          fi

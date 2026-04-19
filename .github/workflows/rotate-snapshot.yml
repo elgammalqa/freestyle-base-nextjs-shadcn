@@ -1,0 +1,116 @@
+name: Rotate sandbox snapshot
+
+# Bakes a Vercel Sandbox snapshot from this template's current main, smoke-
+# tests it end-to-end, and atomically rotates the SANDBOX_SNAPSHOT_FULLSTACK
+# env var on the main Buildra Vercel project. Only rotates if every gate in
+# scripts/bake-snapshot.mjs passes — a bad template cannot reach production.
+#
+# Triggers:
+#   workflow_dispatch — run manually from the Actions tab after a template
+#                       PR merges. Default safe path.
+#
+# Required repo secrets:
+#   VERCEL_TOKEN              — Vercel access token with write access to
+#                               both the sandbox project and buildra
+#   VERCEL_TEAM_ID            — Vercel team id
+#   VERCEL_SANDBOX_PROJECT_ID — project where template snapshots are baked
+#   BUILDRA_PROJECT_ID        — main buildra project id (the one whose env
+#                               var gets rotated)
+#
+# Auto-trigger on push to main is intentionally NOT enabled yet — rotating
+# production snapshots should be a deliberate action until the LLM-smoke
+# stage (Tier 3) is added to catch template/agent prompt drift.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to bake (default: main)"
+        default: main
+        required: false
+
+concurrency:
+  group: rotate-snapshot
+  cancel-in-progress: false
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_SANDBOX_PROJECT_ID: ${{ secrets.VERCEL_SANDBOX_PROJECT_ID }}
+      BUILDRA_PROJECT_ID: ${{ secrets.BUILDRA_PROJECT_ID }}
+      TEMPLATE_REF: ${{ inputs.ref || 'main' }}
+
+    steps:
+      - name: Verify secrets present
+        run: |
+          missing=""
+          [ -z "$VERCEL_TOKEN" ] && missing="$missing VERCEL_TOKEN"
+          [ -z "$VERCEL_TEAM_ID" ] && missing="$missing VERCEL_TEAM_ID"
+          [ -z "$VERCEL_SANDBOX_PROJECT_ID" ] && missing="$missing VERCEL_SANDBOX_PROJECT_ID"
+          [ -z "$BUILDRA_PROJECT_ID" ] && missing="$missing BUILDRA_PROJECT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::missing required secrets:$missing"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install @vercel/sandbox (ephemeral — not a template dep)
+        run: npm install --no-save @vercel/sandbox
+
+      - name: Bake + smoke snapshot
+        id: bake
+        run: |
+          set -o pipefail
+          SNAP_ID=$(node scripts/bake-snapshot.mjs 2> >(tee -a bake.stderr >&2))
+          if [ -z "$SNAP_ID" ]; then
+            echo "::error::bake script did not emit a snapshot id"
+            tail -n 100 bake.stderr
+            exit 1
+          fi
+          echo "snapshot_id=$SNAP_ID" >> "$GITHUB_OUTPUT"
+          echo "::notice::baked snapshot $SNAP_ID"
+
+      - name: Upsert SANDBOX_SNAPSHOT_FULLSTACK on buildra project (production)
+        env:
+          SNAP_ID: ${{ steps.bake.outputs.snapshot_id }}
+        run: |
+          bash .github/scripts/vercel-upsert-env.sh \
+            "$BUILDRA_PROJECT_ID" SANDBOX_SNAPSHOT_FULLSTACK "$SNAP_ID" production
+
+      - name: Upsert SANDBOX_SNAPSHOT_FULLSTACK on buildra project (preview)
+        env:
+          SNAP_ID: ${{ steps.bake.outputs.snapshot_id }}
+        run: |
+          bash .github/scripts/vercel-upsert-env.sh \
+            "$BUILDRA_PROJECT_ID" SANDBOX_SNAPSHOT_FULLSTACK "$SNAP_ID" preview
+
+      - name: Trigger buildra redeploy (production)
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.vercel.com/v13/deployments?forceNew=1&teamId=$VERCEL_TEAM_ID" \
+            -d "$(node -e 'console.log(JSON.stringify({name: "buildra", target: "production", project: process.env.BUILDRA_PROJECT_ID, gitSource: {type: "github", ref: "main", repoId: null}}))')" \
+            > redeploy.json || {
+              echo "::warning::could not automatically trigger redeploy — new env var will apply on next Vercel deploy"
+              cat redeploy.json 2>/dev/null || true
+              exit 0
+            }
+          echo "::notice::triggered buildra redeploy so the new snapshot env var is picked up"
+
+      - name: Summary
+        run: |
+          echo "### Snapshot rotation complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Template ref: \`$TEMPLATE_REF\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Snapshot id: \`${{ steps.bake.outputs.snapshot_id }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Buildra \`SANDBOX_SNAPSHOT_FULLSTACK\` updated on production + preview" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Next buildra deploy will boot sandboxes from the new snapshot" >> "$GITHUB_STEP_SUMMARY"
