@@ -1,0 +1,309 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: CRM API specification — edit this file to add/change endpoints, then run `npm run codegen`.
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+  - name: customers
+  - name: deals
+  - name: dashboard
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Pipeline metrics (totals, counts)
+      responses:
+        "200":
+          description: Dashboard metrics
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DashboardSummary" }
+
+  /customers:
+    get:
+      operationId: listCustomers
+      tags: [customers]
+      summary: List customers
+      parameters:
+        - name: search
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: List of customers
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Customer" }
+    post:
+      operationId: createCustomer
+      tags: [customers]
+      summary: Create a customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCustomerBody" }
+      responses:
+        "201":
+          description: Customer created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Customer" }
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /customers/{id}:
+    get:
+      operationId: getCustomer
+      tags: [customers]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Customer
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Customer" }
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    patch:
+      operationId: updateCustomer
+      tags: [customers]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateCustomerBody" }
+      responses:
+        "200":
+          description: Customer updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Customer" }
+    delete:
+      operationId: deleteCustomer
+      tags: [customers]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "204":
+          description: Deleted
+
+  /deals:
+    get:
+      operationId: listDeals
+      tags: [deals]
+      parameters:
+        - name: stage
+          in: query
+          required: false
+          schema: { type: string }
+        - name: customerId
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        "200":
+          description: List of deals
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Deal" }
+    post:
+      operationId: createDeal
+      tags: [deals]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateDealBody" }
+      responses:
+        "201":
+          description: Deal created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Deal" }
+
+  /deals/{id}:
+    get:
+      operationId: getDeal
+      tags: [deals]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Deal
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Deal" }
+    patch:
+      operationId: updateDeal
+      tags: [deals]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateDealBody" }
+      responses:
+        "200":
+          description: Deal updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Deal" }
+    delete:
+      operationId: deleteDeal
+      tags: [deals]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "204":
+          description: Deleted
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status, timestamp]
+      properties:
+        status: { type: string, enum: [ok] }
+        timestamp: { type: string, format: date-time }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+
+    DashboardSummary:
+      type: object
+      required: [totalPipelineValue, wonDealsValue, activeDeals, totalCustomers]
+      properties:
+        totalPipelineValue: { type: number }
+        wonDealsValue: { type: number }
+        activeDeals: { type: integer }
+        totalCustomers: { type: integer }
+
+    Customer:
+      type: object
+      required: [id, name, email, createdAt, updatedAt]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string, nullable: true }
+        company: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CreateCustomerBody:
+      type: object
+      required: [name, email]
+      properties:
+        name: { type: string, minLength: 1 }
+        email: { type: string, format: email }
+        phone: { type: string, nullable: true }
+        company: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+
+    UpdateCustomerBody:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        email: { type: string, format: email }
+        phone: { type: string, nullable: true }
+        company: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+
+    Deal:
+      type: object
+      required: [id, title, value, stage, createdAt, updatedAt]
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        value: { type: string, description: "numeric(12,2) serialized as string" }
+        stage:
+          type: string
+          enum: [lead, qualified, proposal, negotiation, closed_won, closed_lost]
+        customerId: { type: integer, nullable: true }
+        notes: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CreateDealBody:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1 }
+        value: { type: string }
+        stage:
+          type: string
+          enum: [lead, qualified, proposal, negotiation, closed_won, closed_lost]
+        customerId: { type: integer, nullable: true }
+        notes: { type: string, nullable: true }
+
+    UpdateDealBody:
+      type: object
+      properties:
+        title: { type: string, minLength: 1 }
+        value: { type: string }
+        stage:
+          type: string
+          enum: [lead, qualified, proposal, negotiation, closed_won, closed_lost]
+        customerId: { type: integer, nullable: true }
+        notes: { type: string, nullable: true }
