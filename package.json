@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "postinstall": "npm run codegen",
+    "predev": "npm run codegen",
     "dev": "next dev --turbopack",
+    "prebuild": "npm run codegen",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

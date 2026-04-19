@@ -1,18 +1,19 @@
-// Named re-exports only. Do NOT add a default export and do NOT add a
-// wildcard `export *` — keeping imports explicit helps Next.js tree-shake
-// client bundles and discourages accidental DB-in-client imports.
+// Aggregate re-export for every table module in db/schema/. Uses `export *`
+// so that forgetting to re-export a new symbol from an entity file is
+// impossible — every new file in this directory is automatically covered
+// as long as it is `export *`-ed here.
 //
-// Server-only by transitivity: everything here depends on drizzle-orm +
-// pg types that are large and server-only. Use `"server-only"` in any
-// file that imports from here (lib/db.ts does this already).
+// Why wildcard, not named re-exports: the LLM agent that edits this file to
+// add an entity previously dropped existing lines on whole-file rewrites,
+// surfacing in production as "Export insertCustomerSchema doesn't exist in
+// target module" the moment a client form tried to import the validator.
+// Wildcard removes that regression path. Client-bundle tree-shaking still
+// works because all exports are ESM named, and the server-only transitivity
+// is enforced by `lib/db.ts` marking itself `server-only` at the import edge.
+//
+// When you add a new entity module (e.g. `db/schema/tasks.ts`), add one line:
+//   export * from "./tasks";
+// That is the whole change.
 
-export { customers, insertCustomerSchema, updateCustomerSchema } from "./customers";
-export type { Customer, InsertCustomer } from "./customers";
-
-export {
-  deals,
-  insertDealSchema,
-  updateDealSchema,
-  DEAL_STAGES,
-} from "./deals";
-export type { Deal, InsertDeal, DealStage } from "./deals";
+export * from "./customers";
+export * from "./deals";
