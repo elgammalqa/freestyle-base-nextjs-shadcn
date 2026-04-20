@@ -16,12 +16,13 @@ import { Users, Briefcase, DollarSign, TrendingUp } from "lucide-react";
 import { KpiCard } from "./kpi-card";
 
 // bundle-dynamic-imports: recharts is ~90KB gzipped. Lazy-load it with a
-// Skeleton fallback so initial paint is fast. ssr:false avoids hydration
-// mismatches for client-only chart internals.
+// Skeleton fallback so initial paint is fast. ssr:true keeps the card
+// shell in server-rendered HTML; only the chart innards stream in via
+// the dynamic chunk.
 const DashboardCharts = dynamic(
   () => import("./dashboard-charts").then((m) => m.DashboardCharts),
   {
-    ssr: false,
+    ssr: true,
     loading: () => <Skeleton className="h-80 w-full rounded-xl" />,
   },
 );

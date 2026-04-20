@@ -7,9 +7,14 @@ import {
   getListCustomersQueryKey,
 } from "@/lib/api-client/generated/api";
 import { DashboardView } from "@/components/dashboard/dashboard-view";
+import { buildMetadata } from "@/lib/metadata";
 
-// Dashboard reads live DB state — never static.
-export const dynamic = "force-dynamic";
+export const metadata = buildMetadata("Dashboard", "Sales pipeline overview");
+
+// Dashboard reads live DB state but tolerates 30s of staleness — using ISR
+// instead of force-dynamic gives us cached HTML for back-to-back navigations
+// while still refreshing at most every 30s. Mutations call revalidatePath.
+export const revalidate = 30;
 
 // server-parallel-fetching: both prefetches fire in parallel via
 // Promise.all. No waterfall on first paint.

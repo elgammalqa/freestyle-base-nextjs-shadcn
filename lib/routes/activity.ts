@@ -12,6 +12,5 @@ export function logActivity(payload: {
   description: string;
   relatedId: number;
 }) {
-  // eslint-disable-next-line no-console
   console.info("[activity]", payload);
 }
