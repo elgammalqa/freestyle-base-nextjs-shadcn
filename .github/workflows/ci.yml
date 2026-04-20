@@ -9,16 +9,14 @@ name: CI
 #   1. `npm ci` — exercises the postinstall codegen hook; generated dirs
 #      must materialize or we fail here.
 #   2. `npm run typecheck` — catches missing re-exports, wrong types, etc.
-#   3. `npm run build` — compiles with `next.config.ts`'s ignoreBuildErrors
+#   3. `npm test` — vitest unit tests (validateJsonBody, CSRF middleware).
+#   4. `npm run build` — compiles with `next.config.ts`'s ignoreBuildErrors
 #      and ignoreDuringBuilds removed, so TS + lint errors now fail the
 #      build instead of silently shipping.
-#   4. `npm run dev` boot + `/api/healthz` smoke — catches runtime
-#      regressions the build doesn't (e.g. a module that compiles fine but
-#      crashes at import).
-#   5. `/api/buildra/selftest` structural checks — ensures the generated
-#      code is loadable and `db/schema/tables` exports are intact. DB
-#      checks are expected to fail here (no real Neon in CI) and we
-#      ignore them; the point is the structural gates.
+#   5. `npm run dev` boot + `/api/healthz` smoke against a REAL postgres
+#      service container (so the DB-ping healthz exercises a live DB).
+#   6. `/api/buildra/selftest` structural checks — ensures the generated
+#      code is loadable and `db/schema/tables` exports are intact.
 
 on:
   pull_request:
@@ -31,13 +29,14 @@ concurrency:
 
 jobs:
   build:
-    name: Build + typecheck
+    name: Build + typecheck + test
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # Dummy URL so `lib/db.ts`'s top-level neon(DATABASE_URL!) doesn't
-      # throw at module load. CI does not touch the real DB — only code
-      # resolution and compilation matter here.
+      # Dummy URL so `lib/db.ts`'s top-level neon(env.DATABASE_URL) doesn't
+      # throw at module load. CI does not touch the real DB during
+      # build/typecheck/test — only code resolution and compilation matter
+      # here. The smoke job below uses a real postgres service.
       DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +59,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Unit tests
+        run: npm test
+
       - name: Build (TS + lint gated)
         run: npm run build
 
@@ -70,6 +72,22 @@ jobs:
     timeout-minutes: 10
     env:
       DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -79,6 +97,9 @@ jobs:
           cache: 'npm'
 
       - run: npm ci
+
+      - name: Push schema to ephemeral postgres
+        run: npx drizzle-kit push --config drizzle.config.ts
 
       - name: Start dev server in background
         run: |
@@ -99,14 +120,44 @@ jobs:
           tail -n 100 dev-server.log
           exit 1
 
-      - name: healthz smoke
+      - name: healthz smoke (db ping)
         run: |
           RESPONSE=$(curl -sS http://localhost:3000/api/healthz)
           echo "healthz response: $RESPONSE"
+          # The improved healthz returns {"status":"ok","db":"ok",...}.
+          # If the DB ping fails it returns 503 with status:degraded.
           echo "$RESPONSE" | grep -q '"status":"ok"' || {
-            echo "::error::healthz body did not include status:ok";
+            echo "::error::healthz did not return status:ok — DB ping or route handler failed";
             exit 1;
           }
+          echo "$RESPONSE" | grep -q '"db":"ok"' || {
+            echo "::error::healthz returned status:ok but db:ok was not present";
+            exit 1;
+          }
+
+      - name: CRUD smoke (POST + PATCH + DELETE customer)
+        run: |
+          set -e
+          # POST a customer
+          CREATE_RESPONSE=$(curl -sS -X POST http://localhost:3000/api/customers \
+            -H "Origin: http://localhost:3000" \
+            -H "Content-Type: application/json" \
+            -d '{"name":"CI Smoke","email":"ci@smoke.test"}')
+          echo "POST response: $CREATE_RESPONSE"
+          ID=$(echo "$CREATE_RESPONSE" | node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(0,"utf8")).id ?? ""))')
+          if [ -z "$ID" ]; then echo "::error::POST did not return an id"; exit 1; fi
+          # PATCH
+          curl -sS -X PATCH "http://localhost:3000/api/customers/$ID" \
+            -H "Origin: http://localhost:3000" \
+            -H "Content-Type: application/json" \
+            -d '{"name":"CI Smoke (patched)"}' | grep -q '"name":"CI Smoke (patched)"' \
+            || { echo "::error::PATCH did not update name"; exit 1; }
+          # DELETE
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" -X DELETE \
+            -H "Origin: http://localhost:3000" \
+            "http://localhost:3000/api/customers/$ID")
+          if [ "$STATUS" != "204" ]; then echo "::error::DELETE returned $STATUS, expected 204"; exit 1; fi
+          echo "::notice::CRUD lifecycle PASSED"
 
       - name: selftest structural checks
         run: |

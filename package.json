@@ -11,6 +11,8 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "codegen": "orval --config orval.config.ts && node scripts/append-drizzle-zod-exports.mjs",
     "codegen:watch": "orval --config orval.config.ts --watch",
     "db:push": "drizzle-kit push --config drizzle.config.ts"
@@ -82,6 +84,7 @@
     "orval": "^8.8.0",
     "tailwindcss": "^4",
     "tw-animate-css": "^1.2.8",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.2"
   }
 }

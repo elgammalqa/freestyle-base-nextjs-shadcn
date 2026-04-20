@@ -50,13 +50,20 @@ export async function customFetch<T>(
   }
   headers.set("Accept", "application/json, application/problem+json");
 
+  // Decide caching:
+  // - Mutations (POST/PATCH/PUT/DELETE) MUST never be cached
+  // - GETs default to Next.js Data Cache (caller can override per-request)
+  // React Query handles browser-side cache; Next.js handles server-side
+  // cache. Hardcoding `cache: "no-store"` here disables both layers.
+  const method = (options.method ?? "GET").toUpperCase();
+  const isMutation = method !== "GET" && method !== "HEAD";
+  const cache: RequestCache | undefined =
+    options.cache ?? (isMutation ? "no-store" : undefined);
+
   const response = await fetch(resolveUrl(url), {
     ...options,
     headers,
-    // Never use Next.js aggressive caching for API calls — all data mutations
-    // and reads should respect freshness. Each route handler opts back into
-    // caching explicitly via `export const revalidate = ...` if desired.
-    cache: "no-store",
+    ...(cache ? { cache } : {}),
   });
 
   // No body
