@@ -119,25 +119,35 @@ async function main() {
       detached: true,
     });
 
-    console.error("[bake] waiting for /api/healthz");
+    console.error("[bake] waiting for /api/healthz to respond");
     let healthOk = false;
     for (let i = 0; i < 45; i++) {
+      // Drop the -f flag because the post-hardening healthz returns 503
+      // when the DB ping fails. During bake there is no real DATABASE_URL
+      // wired (we use a dummy), so 503 is the steady state. What we
+      // actually care about is that the route handler RUNS — proving
+      // env validation, neon client init, middleware, and providers all
+      // loaded cleanly. A 200 still passes if a real DB happens to be
+      // reachable; either way, "responded" means the server is up.
       const probe = await runInSandbox(
         sandbox,
-        "curl -sf -o /dev/null -w '%{http_code}' http://localhost:3000/api/healthz",
+        "curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/healthz",
         10_000,
       );
       const code = parseInt(probe.stdout.trim(), 10);
-      if (code >= 200 && code < 400) {
+      if (code === 200 || code === 503) {
         healthOk = true;
-        console.error(`[bake] healthz ok after ${i * 2}s`);
+        console.error(
+          `[bake] healthz responded ${code} after ${i * 2}s` +
+            (code === 503 ? " (degraded — no real DB in bake, expected)" : ""),
+        );
         break;
       }
       await new Promise((r) => setTimeout(r, 2000));
     }
     if (!healthOk) {
       const logs = await runInSandbox(sandbox, "tail -n 100 /tmp/dev.log", 10_000);
-      console.error("[bake] healthz never came up — dev server log:");
+      console.error("[bake] healthz never responded — dev server log:");
       console.error(logs.stdout);
       throw new Error("dev server never became healthy");
     }
