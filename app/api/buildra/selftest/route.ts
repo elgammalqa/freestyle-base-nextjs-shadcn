@@ -114,6 +114,117 @@ async function checkSchemaExports(): Promise<Check> {
   }
 }
 
+/**
+ * Data-layer CRUD roundtrip: insert → update → delete a throwaway row
+ * on every starter table, using the same Drizzle client + validators the
+ * route handlers use. Catches:
+ *   - stale codegen with API/type drift
+ *   - drizzle-zod schema mismatches with the live table shape
+ *   - migration drift (schema defined in TS but not present on DB)
+ *   - NOT NULL columns added to the schema but not enforced in validators
+ *
+ * Test rows use a stable `__buildra_selftest_` email prefix and are
+ * always deleted at the end. Errors are surfaced per-entity.
+ */
+async function checkDataLayerRoundtrip(): Promise<Check[]> {
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    return [
+      { name: "customers CRUD roundtrip", ok: false, detail: "skipped — DATABASE_URL not set" },
+      { name: "deals CRUD roundtrip", ok: false, detail: "skipped — DATABASE_URL not set" },
+    ];
+  }
+
+  const [dbMod, schemaMod, drizzleMod] = await Promise.all([
+    import("@/lib/db"),
+    import("@/db/schema/tables"),
+    import("drizzle-orm"),
+  ]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { db } = dbMod as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { customers, deals, insertCustomerSchema, updateCustomerSchema, insertDealSchema, updateDealSchema } = schemaMod as any;
+  const { eq } = drizzleMod;
+
+  const checks: Check[] = [];
+  const tag = `__buildra_selftest_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  // ---- customers ----
+  let customerId: number | null = null;
+  try {
+    const insertInput = insertCustomerSchema.parse({
+      name: `Buildra Selftest ${tag}`,
+      email: `${tag}@selftest.buildra.invalid`,
+    });
+    const [inserted] = await db.insert(customers).values(insertInput).returning();
+    if (!inserted?.id) throw new Error("insert returned no row");
+    customerId = inserted.id as number;
+
+    const updateInput = updateCustomerSchema.parse({ name: `${insertInput.name} (updated)` });
+    const [updated] = await db
+      .update(customers)
+      .set(updateInput)
+      .where(eq(customers.id, customerId))
+      .returning();
+    if (!updated || updated.name !== updateInput.name) {
+      throw new Error(`update did not persist (got name=${updated?.name})`);
+    }
+
+    await db.delete(customers).where(eq(customers.id, customerId));
+    customerId = null;
+
+    checks.push({ name: "customers CRUD roundtrip", ok: true });
+  } catch (err) {
+    checks.push({
+      name: "customers CRUD roundtrip",
+      ok: false,
+      detail: err instanceof Error ? err.message : String(err),
+    });
+    if (customerId !== null) {
+      await db.delete(customers).where(eq(customers.id, customerId)).catch(() => {});
+    }
+  }
+
+  // ---- deals ----
+  let dealId: number | null = null;
+  try {
+    const insertInput = insertDealSchema.parse({
+      title: `Buildra Selftest Deal ${tag}`,
+      value: "0",
+      stage: "lead",
+    });
+    const [inserted] = await db.insert(deals).values(insertInput).returning();
+    if (!inserted?.id) throw new Error("insert returned no row");
+    dealId = inserted.id as number;
+
+    const updateInput = updateDealSchema.parse({ stage: "qualified" });
+    const [updated] = await db
+      .update(deals)
+      .set(updateInput)
+      .where(eq(deals.id, dealId))
+      .returning();
+    if (!updated || updated.stage !== "qualified") {
+      throw new Error(`update did not persist (got stage=${updated?.stage})`);
+    }
+
+    await db.delete(deals).where(eq(deals.id, dealId));
+    dealId = null;
+
+    checks.push({ name: "deals CRUD roundtrip", ok: true });
+  } catch (err) {
+    checks.push({
+      name: "deals CRUD roundtrip",
+      ok: false,
+      detail: err instanceof Error ? err.message : String(err),
+    });
+    if (dealId !== null) {
+      await db.delete(deals).where(eq(deals.id, dealId)).catch(() => {});
+    }
+  }
+
+  return checks;
+}
+
 export async function GET() {
   const [envCheck, tableChecks, codegenChecks, schemaCheck] = await Promise.all([
     checkDatabaseUrl(),
@@ -122,7 +233,17 @@ export async function GET() {
     checkSchemaExports(),
   ]);
 
-  const checks: Check[] = [envCheck, ...tableChecks, ...codegenChecks, schemaCheck];
+  // CRUD roundtrip runs serially after the structural checks so a failing
+  // env/table check short-circuits the expensive DB writes.
+  const crudChecks: Check[] =
+    envCheck.ok && tableChecks.every((c) => c.ok)
+      ? await checkDataLayerRoundtrip()
+      : [
+          { name: "customers CRUD roundtrip", ok: false, detail: "skipped — env or tables not ready" },
+          { name: "deals CRUD roundtrip", ok: false, detail: "skipped — env or tables not ready" },
+        ];
+
+  const checks: Check[] = [envCheck, ...tableChecks, ...codegenChecks, schemaCheck, ...crudChecks];
   const ok = checks.every((c) => c.ok);
 
   return NextResponse.json({ ok, checks }, { status: ok ? 200 : 503 });

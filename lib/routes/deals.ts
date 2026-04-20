@@ -7,7 +7,7 @@ import {
   insertDealSchema,
   updateDealSchema,
 } from "@/db/schema/tables";
-import { errorResponse, handleValidationError } from "./errors";
+import { errorResponse, validateJsonBody } from "./errors";
 import { logActivity } from "./activity";
 
 export async function listDeals(req: Request) {
@@ -32,10 +32,10 @@ export async function listDeals(req: Request) {
 }
 
 export async function createDeal(req: Request) {
-  const parsed = insertDealSchema.safeParse(await req.json());
-  if (!parsed.success) return handleValidationError(parsed.error.issues);
+  const body = await validateJsonBody(req, insertDealSchema);
+  if (!body.ok) return body.response;
 
-  const [row] = await db.insert(deals).values(parsed.data).returning();
+  const [row] = await db.insert(deals).values(body.data).returning();
 
   after(() =>
     logActivity({
@@ -61,19 +61,19 @@ export async function updateDeal(req: Request, params: { id: string }) {
   const id = Number(params.id);
   if (!Number.isInteger(id)) return errorResponse("bad_id", "id must be integer", 400);
 
-  const parsed = updateDealSchema.safeParse(await req.json());
-  if (!parsed.success) return handleValidationError(parsed.error.issues);
+  const body = await validateJsonBody(req, updateDealSchema);
+  if (!body.ok) return body.response;
 
   const [row] = await db
     .update(deals)
-    .set(parsed.data)
+    .set(body.data)
     .where(eq(deals.id, id))
     .returning();
 
   if (!row) return errorResponse("not_found", "deal not found", 404);
 
   // Activity log for stage changes — common CRM pattern.
-  if (parsed.data.stage && parsed.data.stage !== row.stage) {
+  if (body.data.stage && body.data.stage !== row.stage) {
     after(() =>
       logActivity({
         type: "deal_stage_changed",
