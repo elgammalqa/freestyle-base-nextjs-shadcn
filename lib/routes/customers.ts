@@ -7,7 +7,7 @@ import {
   insertCustomerSchema,
   updateCustomerSchema,
 } from "@/db/schema/tables";
-import { errorResponse, handleValidationError } from "./errors";
+import { errorResponse, validateJsonBody } from "./errors";
 import { logActivity } from "./activity";
 
 export async function listCustomers(req: Request) {
@@ -35,10 +35,10 @@ export async function listCustomers(req: Request) {
 }
 
 export async function createCustomer(req: Request) {
-  const parsed = insertCustomerSchema.safeParse(await req.json());
-  if (!parsed.success) return handleValidationError(parsed.error.issues);
+  const body = await validateJsonBody(req, insertCustomerSchema);
+  if (!body.ok) return body.response;
 
-  const [row] = await db.insert(customers).values(parsed.data).returning();
+  const [row] = await db.insert(customers).values(body.data).returning();
 
   // server-after-nonblocking: activity log fires post-response.
   after(() =>
@@ -67,12 +67,12 @@ export async function updateCustomer(req: Request, params: { id: string }) {
   const id = Number(params.id);
   if (!Number.isInteger(id)) return errorResponse("bad_id", "id must be integer", 400);
 
-  const parsed = updateCustomerSchema.safeParse(await req.json());
-  if (!parsed.success) return handleValidationError(parsed.error.issues);
+  const body = await validateJsonBody(req, updateCustomerSchema);
+  if (!body.ok) return body.response;
 
   const [row] = await db
     .update(customers)
-    .set(parsed.data)
+    .set(body.data)
     .where(eq(customers.id, id))
     .returning();
 
