@@ -11,7 +11,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "codegen": "orval --config orval.config.ts",
+    "codegen": "orval --config orval.config.ts && node scripts/append-drizzle-zod-exports.mjs",
     "codegen:watch": "orval --config orval.config.ts --watch",
     "db:push": "drizzle-kit push --config drizzle.config.ts"
   },
