@@ -1,40 +1,19 @@
-import { HydrationBoundary, dehydrate } from "@tanstack/react-query";
-import { getQueryClient } from "./get-query-client";
-import {
-  getDashboardSummary,
-  getGetDashboardSummaryQueryKey,
-  listCustomers,
-  getListCustomersQueryKey,
-} from "@/lib/api-client/generated/api";
-import { DashboardView } from "@/components/dashboard/dashboard-view";
 import { buildMetadata } from "@/lib/metadata";
 
-export const metadata = buildMetadata("Dashboard", "Sales pipeline overview");
+export const metadata = buildMetadata("Home", "Welcome to your new app");
 
-// Dashboard reads live DB state but tolerates 30s of staleness — using ISR
-// instead of force-dynamic gives us cached HTML for back-to-back navigations
-// while still refreshing at most every 30s. Mutations call revalidatePath.
-export const revalidate = 30;
-
-// server-parallel-fetching: both prefetches fire in parallel via
-// Promise.all. No waterfall on first paint.
-export default async function DashboardPage() {
-  const queryClient = getQueryClient();
-
-  await Promise.all([
-    queryClient.prefetchQuery({
-      queryKey: getGetDashboardSummaryQueryKey(),
-      queryFn: () => getDashboardSummary(),
-    }),
-    queryClient.prefetchQuery({
-      queryKey: getListCustomersQueryKey(),
-      queryFn: () => listCustomers(),
-    }),
-  ]);
-
+export default function HomePage() {
   return (
-    <HydrationBoundary state={dehydrate(queryClient)}>
-      <DashboardView />
-    </HydrationBoundary>
+    <main className="mx-auto flex min-h-[60dvh] max-w-2xl flex-col items-center justify-center gap-6 p-8 text-center">
+      <h1 className="text-4xl font-semibold tracking-tight">Welcome</h1>
+      <p className="text-muted-foreground">
+        This is a blank Next.js + Tailwind + shadcn/ui starter with Drizzle and
+        a Neon database already wired up. Edit <code className="rounded bg-muted px-1.5 py-0.5 text-sm">app/page.tsx</code> to
+        replace this screen, or add a new entity in
+        <code className="rounded bg-muted px-1.5 py-0.5 text-sm">db/schema</code> and expose it via
+        <code className="rounded bg-muted px-1.5 py-0.5 text-sm">openapi.yaml</code> +
+        <code className="rounded bg-muted px-1.5 py-0.5 text-sm">app/api</code>.
+      </p>
+    </main>
   );
 }

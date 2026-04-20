@@ -11,9 +11,9 @@
 // works because all exports are ESM named, and the server-only transitivity
 // is enforced by `lib/db.ts` marking itself `server-only` at the import edge.
 //
-// When you add a new entity module (e.g. `db/schema/tasks.ts`), add one line:
+// Blank start — add entity files as needed. For each new file (e.g.
+// `db/schema/tasks.ts`) add one line here:
 //   export * from "./tasks";
 // That is the whole change.
 
-export * from "./customers";
-export * from "./deals";
+export {};
