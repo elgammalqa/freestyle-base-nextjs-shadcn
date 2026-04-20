@@ -26,14 +26,17 @@ export const revalidate = 30;  // ISR — never use force-dynamic on a page
 
 ## When you create a new entity (e.g. invoices, tickets)
 
-You must create exactly these files together. Skipping any one will fail
-typecheck OR runtime smoke.
+**ORDER MATTERS.** Create files in this exact sequence. The codegen pipeline
+guards against half-mutated state — if you add the re-export line in step 2
+before the file exists from step 1, `npm run codegen` will fail with a
+specific error telling you exactly what's missing. Don't try to "fix it
+later" — fix it immediately when the guard fires.
 
-1. `db/schema/<name>.ts`
+1. **First**: write `db/schema/<name>.ts`
    - drizzle table + `insertXxxSchema` + `updateXxxSchema` + `Xxx` type
-2. `db/schema/tables.ts`
-   - re-export the table + `insertXxxSchema` + `updateXxxSchema`
-3. `openapi.yaml`
+2. **Then**: edit `db/schema/tables.ts` to add `export * from "./<name>";`
+   - The guard verifies the file from step 1 exists before allowing this
+3. **Then**: add paths to `openapi.yaml`
    - paths for `/api/<name>`, `/api/<name>/{id}` with all four methods
    - request bodies + response schemas
 4. `lib/routes/<name>.ts`
@@ -111,3 +114,28 @@ the user can create/edit. GET-only is rejected.
 - `middleware.ts` — origin-based CSRF check on /api/* mutations
 - `lib/env.ts` — fails boot on missing env, imported by lib/db.ts
 - `lib/auth.ts` — auth seam (stub today; real provider tomorrow)
+- `scripts/verify-schema-state.mjs` — schema/codegen pre-flight guard
+
+## When the schema-state guard fires
+
+`npm run codegen` runs `scripts/verify-schema-state.mjs` first. It catches
+two silent failures the agent has historically hit:
+
+**Error: re-exports "./X" but db/schema/X.ts does not exist**
+You added `export * from "./X";` to `db/schema/tables.ts` before creating
+`db/schema/X.ts`. Either:
+- Create `db/schema/X.ts` with the table + `insertXSchema` + `updateXSchema`
+- Or remove the `export * from` line
+
+**Error: db/schema/X.ts exists but is NOT re-exported**
+You created `db/schema/X.ts` but forgot to add the re-export. Add:
+```ts
+export * from "./X";  // in db/schema/tables.ts
+```
+without this, `import { insertXSchema } from "@/db/schema/tables"` returns
+undefined and forms break at runtime.
+
+**Why this matters:** before the guard, both errors only surfaced at
+request-time as "Module not found" 500s, and the agent would spend 10+
+turns chasing red herrings (number-vs-string types, react-hook-form,
+nav-items exports, etc.) that weren't actually the problem.
