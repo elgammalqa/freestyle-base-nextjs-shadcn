@@ -50,10 +50,19 @@ const nextConfig: NextConfig = {
     ],
   },
 
-  // Baseline security headers. Free safety, no perf cost. Apps generated
-  // from this template inherit a passing scorecard from securityheaders.com
-  // out of the box. Add a CSP via your own middleware if you have inline
-  // scripts that need nonces.
+  // Baseline security headers. Free safety, no perf cost.
+  //
+  // Clickjacking protection uses CSP `frame-ancestors 'none'` instead of the
+  // legacy `X-Frame-Options: DENY`. CSP is the modern successor — browsers
+  // honor it over XFO when both are set, and it's more granular (origin
+  // allowlist is possible if you ever need to embed your app elsewhere).
+  //
+  // Why the NODE_ENV guard: during development the app is hosted inside a
+  // remote preview iframe (e.g. the Buildra workspace previews `npm run dev`
+  // via a Vercel Sandbox URL). Setting `frame-ancestors 'none'` globally
+  // would block that preview with a browser "refused to connect" error.
+  // Production user deployments never sit inside that preview frame, so the
+  // header kicks in there and your deployed app remains clickjacking-safe.
   async headers() {
     return [
       {
@@ -62,8 +71,10 @@ const nextConfig: NextConfig = {
           { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-          { key: "X-Frame-Options", value: "DENY" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          ...(process.env.NODE_ENV === "production"
+            ? [{ key: "Content-Security-Policy", value: "frame-ancestors 'none'" } as const]
+            : []),
         ],
       },
     ];
